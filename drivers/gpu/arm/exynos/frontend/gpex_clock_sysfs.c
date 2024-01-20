@@ -167,9 +167,6 @@ GPEX_STATIC ssize_t set_max_lock_dvfs(const char *buf, size_t count)
 		if (gaming_mode)
 			clock = gpex_clock_get_max_clock();
 
-		if (clock < SUSTAINABLE_FREQ)
-			clock = SUSTAINABLE_FREQ;
-
 		clk_info->user_max_lock_input = clock;
 
 		clock = gpex_get_valid_gpu_clock(clock, false);
@@ -366,8 +363,6 @@ GPEX_STATIC ssize_t set_mm_min_lock_dvfs(const char *buf, size_t count)
 		
 		if (gaming_mode)
 			clock = gpex_clock_get_min_clock();
-
-		clk_info->user_min_lock_input = clock;
 
 		clock = gpex_get_valid_gpu_clock(clock, true);
 

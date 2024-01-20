@@ -76,8 +76,6 @@ static void cgroup_game_check(struct task_struct *tsk, const char *name)
 {
 	if (!strcmp(name, "top-app"))
 		game_option(tsk, GAME_RUNNING);
-	else if (!strcmp(name, "foreground"))
-		game_option(tsk, GAME_RUNNING);
 	else if (!strcmp(name, "background"))
 		game_option(tsk, GAME_PAUSE);
 }

@@ -2166,6 +2166,10 @@ long _do_fork(unsigned long clone_flags,
 	
 	game_option(current, GAME_START);
 
+	game_option(current, GAME_START);
+
+	game_option(current, GAME_START);
+
 	/*
 	 * Determine whether and which event to report to ptracer.  When
 	 * called from kernel_thread or CLONE_UNTRACED is explicitly

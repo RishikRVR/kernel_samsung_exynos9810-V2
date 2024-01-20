@@ -24,12 +24,22 @@
 #include <linux/mm.h>
 #include <linux/slab.h>
 #include <linux/pm_qos.h>
+#include <linux/workqueue.h>
+#include <linux/regulator/consumer.h>
 #include <linux/gaming_control.h>
 #include <soc/samsung/cal-if.h>
 #include <soc/samsung/exynos-cpu_hotplug.h>
 #include <dt-bindings/clock/exynos9810.h>
 #include "../soc/samsung/cal-if/exynos9810/cmucal-vclk.h"
 #include "../soc/samsung/cal-if/exynos9810/cmucal-node.h"
+
+#define DEFAULT_CPU_LIMIT 1794000
+#define TEMP_EMULATION 20000
+#define STEP_UV			(6250)
+
+static struct delayed_work customs_delayed_work;
+
+static struct regulator *little_regulator, *big_regulator, *g3d_regulator;
 
 extern unsigned long arg_cpu_max_c1;
 extern unsigned long arg_cpu_min_c1;
@@ -60,6 +70,7 @@ static unsigned int back_little_freq, back_little_voltage, back_big_freq, back_b
 static int nr_running_games = 0;
 static bool always_on = 0;
 static bool battery_idle = 0;
+static int thermal_bypass = 0;
 static bool gaming_mode_initialized = 0;
 
 bool gaming_mode;
@@ -68,6 +79,66 @@ char games_list[GAME_LIST_LENGTH] = {0};
 pid_t games_pid[NUM_SUPPORTED_RUNNING_GAMES] = {
 	[0 ... (NUM_SUPPORTED_RUNNING_GAMES - 1)] = -1
 };
+
+static inline void set_custom_gaming_mode(void)
+{
+	unsigned int little_freq = max_little_freq;
+	unsigned int big_freq = max_big_freq;
+	unsigned int gpu_freq = max_gpu_freq;
+
+	gaming_mode_initialized = gaming_mode;
+
+	if (custom_little_freq) {
+		if (custom_little_freq <= arg_cpu_min_c1)
+			little_freq = arg_cpu_min_c1;
+		else if (custom_little_freq >= arg_cpu_max_c1)
+			little_freq = arg_cpu_max_c1;
+
+		__cal_dfs_set_rate(ACPM_DVFS_CPUCL0, gaming_mode ? custom_little_freq : little_freq);
+		__cal_dfs_set_rate(VCLK_CLUSTER0, (gaming_mode ? custom_little_freq : little_freq) * 1000);
+		__cal_dfs_set_rate(PLL_CPUCL0, (gaming_mode ? custom_little_freq : little_freq) * 1000);
+	}
+
+	if (custom_big_freq) {
+		if (custom_big_freq <= arg_cpu_min_c2) {
+			big_freq = arg_cpu_min_c2;
+		} else if (custom_big_freq >= arg_cpu_max_c2) {
+			if (gaming_mode || DEFAULT_CPU_LIMIT > arg_cpu_max_c2)
+				big_freq = arg_cpu_max_c2;
+			else
+				big_freq = DEFAULT_CPU_LIMIT;
+		}
+
+		__cal_dfs_set_rate(ACPM_DVFS_CPUCL1, gaming_mode ? custom_big_freq : big_freq);
+		__cal_dfs_set_rate(VCLK_CLUSTER1, (gaming_mode ? custom_big_freq : big_freq) * 1000);
+		__cal_dfs_set_rate(PLL_CPUCL1, (gaming_mode ? custom_big_freq : big_freq) * 1000);
+	}
+
+	if (custom_gpu_freq) {
+		if (custom_gpu_freq <= arg_gpu_min)
+			gpu_freq = arg_gpu_min;
+		else if (custom_gpu_freq >= arg_gpu_max)
+			gpu_freq = arg_gpu_max;
+
+		__cal_dfs_set_rate(ACPM_DVFS_G3D, gaming_mode ? custom_gpu_freq : gpu_freq);
+		__cal_dfs_set_rate(VCLK_GPU, (gaming_mode ? custom_gpu_freq : gpu_freq) * 1000);
+		__cal_dfs_set_rate(PLL_G3D, (gaming_mode ? custom_gpu_freq : gpu_freq) * 1000);
+	}
+}
+
+static void set_custom_gaming_mode_handler(struct work_struct *work)
+{
+	if (gaming_mode && little_regulator && big_regulator && g3d_regulator) {
+		if ((!custom_little_voltage || abs(custom_little_voltage - regulator_get_voltage(little_regulator)) < STEP_UV)
+			&& (!custom_big_voltage || abs(custom_big_voltage - regulator_get_voltage(big_regulator)) < STEP_UV)
+			&& (!custom_gpu_voltage || abs(custom_gpu_voltage - regulator_get_voltage(g3d_regulator)) < STEP_UV))
+			set_custom_gaming_mode();
+		else
+			queue_delayed_work(system_power_efficient_wq, &customs_delayed_work, msecs_to_jiffies(1000));
+	} else if (gaming_mode_initialized || little_regulator == NULL || big_regulator == NULL || g3d_regulator == NULL) {
+		set_custom_gaming_mode();
+	}
+}
 
 static inline void set_gaming_mode(bool mode, bool force)
 {
@@ -81,8 +152,10 @@ static inline void set_gaming_mode(bool mode, bool force)
 	else
 		gaming_mode = mode;
 
-	if (!mode)
-		gaming_mode_initialized = 0;
+	if (!mode) {
+		cancel_delayed_work_sync(&customs_delayed_work);
+		set_custom_gaming_mode();
+	}
 
 	little_max = max_little_freq;
 	little_min = min_little_freq;
@@ -110,10 +183,14 @@ static inline void set_gaming_mode(bool mode, bool force)
 	}
 
 	if (custom_big_freq) {
-		if (custom_big_freq <= arg_cpu_min_c2)
+		if (custom_big_freq <= arg_cpu_min_c2) {
 			big_max = big_min = arg_cpu_min_c2;
-		else if (custom_big_freq >= arg_cpu_max_c2)
-			big_max = big_min = arg_cpu_max_c2;
+		} else if (custom_big_freq >= arg_cpu_max_c2) {
+			if (mode || DEFAULT_CPU_LIMIT > arg_cpu_max_c2)
+				big_max = big_min = arg_cpu_max_c2;
+			else
+				big_max = big_min = DEFAULT_CPU_LIMIT;
+		}
 	}
 
 	if (!back_big_freq)
@@ -160,25 +237,7 @@ static inline void set_gaming_mode(bool mode, bool force)
 	gpu_custom_min_clock(mode ? gpu_min : 0);
 
 	if (mode)
-		gaming_mode_initialized = 1;
-
-	if (custom_little_freq) {
-		__cal_dfs_set_rate(ACPM_DVFS_CPUCL0, mode ? custom_little_freq : little_max);
-		__cal_dfs_set_rate(VCLK_CLUSTER0, (mode ? custom_little_freq : little_max) * 1000);
-		__cal_dfs_set_rate(PLL_CPUCL0, (mode ? custom_little_freq : little_max) * 1000);
-	}
-
-	if (custom_big_freq) {
-		__cal_dfs_set_rate(ACPM_DVFS_CPUCL1, mode ? custom_big_freq : big_max);
-		__cal_dfs_set_rate(VCLK_CLUSTER1, (mode ? custom_big_freq : big_max) * 1000);
-		__cal_dfs_set_rate(PLL_CPUCL1, (mode ? custom_big_freq : big_max) * 1000);
-	}
-
-	if (custom_gpu_freq) {
-		__cal_dfs_set_rate(ACPM_DVFS_G3D, mode ? custom_gpu_freq : gpu_max);
-		__cal_dfs_set_rate(VCLK_GPU, (mode ? custom_gpu_freq : gpu_max) * 1000);
-		__cal_dfs_set_rate(PLL_G3D, (mode ? custom_gpu_freq : gpu_max) * 1000);
-	}
+		set_custom_gaming_mode_handler(NULL);
 }
 
 unsigned long cal_dfs_check_gaming_mode(unsigned int id) {
@@ -243,6 +302,17 @@ bool battery_idle_gaming(void) {
 	return 0;
 }
 
+int thermal_bypass_gaming(void) {
+	if (gaming_mode && thermal_bypass) {
+		if (thermal_bypass == 1)
+			return TEMP_EMULATION;
+		else
+			return thermal_bypass;
+	}
+
+	return 0;
+}
+
 static inline void store_game_pid(pid_t pid)
 {
 	int i;
@@ -251,7 +321,9 @@ static inline void store_game_pid(pid_t pid)
 		if (games_pid[i] == -1) {
 			games_pid[i] = pid;
 			nr_running_games++;
-	}	}
+			break;
+		}
+	}
 }
 
 static inline int check_game_pid(pid_t pid)
@@ -287,6 +359,17 @@ static inline void clear_dead_pids(void)
 		set_gaming_mode(false, false);
 }
 
+static inline void removeSubstringAfterChar(char *str, char ch) {
+    char *ptr = str;
+    while (*ptr != '\0') {
+        if (*ptr == ch) {
+            *(ptr) = '\0';
+            return;
+        }
+        ptr++;
+    }
+}
+
 static int check_for_games(struct task_struct *tsk)
 {
 	char *cmdline;
@@ -302,8 +385,11 @@ static int check_for_games(struct task_struct *tsk)
 		return 0;
 	}
 
+	/* clean extra process identifier */
+	removeSubstringAfterChar(cmdline, ':');
+
 	/* Invalid Android process name. Bail out */
-	if (strlen(cmdline) < 7) {
+	if (!strcmp(cmdline, "android") || strlen(cmdline) < 7) {
 		kfree(cmdline);
 		return 0;
 	}
@@ -402,6 +488,7 @@ static struct kobj_attribute type##_attribute =				\
 
 attr_value(always_on);
 attr_value(battery_idle);
+attr_value(thermal_bypass);
 attr_value(min_int_freq);
 attr_value(min_mif_freq);
 attr_value(min_little_freq);
@@ -417,11 +504,32 @@ attr_value(custom_big_voltage);
 attr_value(custom_gpu_freq);
 attr_value(custom_gpu_voltage);
 
+static ssize_t status_show(struct kobject *kobj,
+		struct kobj_attribute *attr, char *buf)
+{
+    ssize_t len = 0;
+	int i;
+
+	len += sprintf(buf + len, "%d\n\n", nr_running_games);
+
+	for (i = 0; i < NUM_SUPPORTED_RUNNING_GAMES; i++) {
+		if (games_pid[i] != -1)
+			len += sprintf(buf + len, "%d\n", games_pid[i]);
+	}
+
+    buf[len] = '\0';
+
+    return len;
+}
+
 static ssize_t version_show(struct kobject *kobj,
 		struct kobj_attribute *attr, char *buf)
 {
 	return sprintf(buf, "%s\n", GAMING_CONTROL_VERSION);
 }
+
+static struct kobj_attribute status_attribute =
+	__ATTR(status, 0444, status_show, NULL);
 
 static struct kobj_attribute version_attribute =
 	__ATTR(version, 0444, version_show, NULL);
@@ -431,9 +539,11 @@ static struct kobj_attribute game_packages_attribute =
 
 static struct attribute *gaming_control_attributes[] = {
 	&game_packages_attribute.attr,
+	&status_attribute.attr,
 	&version_attribute.attr,
 	&always_on_attribute.attr,
 	&battery_idle_attribute.attr,
+	&thermal_bypass_attribute.attr,
 	&min_int_freq_attribute.attr,
 	&min_mif_freq_attribute.attr,
 	&min_little_freq_attribute.attr,
@@ -457,9 +567,23 @@ static struct attribute_group gaming_control_control_group = {
 
 static struct kobject *gaming_control_kobj;
 
-static int gaming_control_init(void)
+static int __init gaming_control_init(void)
 {
 	int sysfs_result;
+
+	little_regulator = regulator_get(NULL, "vdd_cpucl0");
+	if (IS_ERR(little_regulator))
+		little_regulator = NULL;
+
+	big_regulator = regulator_get(NULL, "vdd_cpucl1");
+	if (IS_ERR(big_regulator))
+		big_regulator = NULL;
+
+	g3d_regulator = regulator_get(NULL, "vdd_g3d");
+	if (IS_ERR(g3d_regulator))
+		g3d_regulator = NULL;
+
+	INIT_DELAYED_WORK(&customs_delayed_work, set_custom_gaming_mode_handler);
 
 	pm_qos_add_request(&gaming_control_min_int_qos, PM_QOS_DEVICE_THROUGHPUT, PM_QOS_DEVICE_THROUGHPUT_DEFAULT_VALUE);
 	pm_qos_add_request(&gaming_control_min_mif_qos, PM_QOS_BUS_THROUGHPUT, PM_QOS_BUS_THROUGHPUT_DEFAULT_VALUE);
@@ -486,8 +610,10 @@ static int gaming_control_init(void)
 }
 
 
-static void gaming_control_exit(void)
+static void __exit gaming_control_exit(void)
 {
+	cancel_delayed_work_sync(&customs_delayed_work);
+
 	pm_qos_remove_request(&gaming_control_min_int_qos);
 	pm_qos_remove_request(&gaming_control_min_mif_qos);
 	pm_qos_remove_request(&gaming_control_min_little_qos);
