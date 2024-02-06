@@ -38,6 +38,7 @@ obj-y			:= filemap.o mempool.o oom_kill.o \
 			   compaction.o vmacache.o \
 			   interval_tree.o list_lru.o workingset.o \
 			   debug.o $(mmu-y) showmem_extra.o
+obj-y += sec_mm/
 
 obj-y += init-mm.o
 
@@ -102,5 +103,13 @@ obj-$(CONFIG_FRAME_VECTOR) += frame_vector.o
 obj-$(CONFIG_DEBUG_PAGE_REF) += debug_page_ref.o
 obj-$(CONFIG_HARDENED_USERCOPY) += usercopy.o
 obj-$(CONFIG_PAGE_BOOST_RECORDING) += io_record.o
+
+# [IOPP-Wformat-v1.0.4.14.patch]
+# check calls to printf and scanf, etc.,
+# to make sure that the arguments supplied have types appropriate to the format string specified,
+# and that the conversions specified in the format string make sense.
+CFLAGS_backing-dev.o = -Wformat
+CFLAGS_page-writeback.o = -Wformat
+
 
 CFLAGS_kmemleak.o += -DCONFIG_DEBUG_FS

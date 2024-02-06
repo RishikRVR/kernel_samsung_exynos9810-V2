@@ -1057,6 +1057,7 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 		info.xlated_prog_len = 0;
 		goto done;
 	}
+
 /*
 	ulen = info.jited_prog_len;
 	info.jited_prog_len = prog->jited_len;
@@ -1067,6 +1068,7 @@ static int bpf_prog_get_info_by_fd(struct bpf_prog *prog,
 			return -EFAULT;
 	}
 */
+
 	ulen = info.xlated_prog_len;
 	info.xlated_prog_len = bpf_prog_size(prog->len);
 	if (info.xlated_prog_len && ulen) {
@@ -1099,7 +1101,7 @@ static int bpf_map_get_info_by_fd(struct bpf_map *map,
 	info_len = min_t(u32, sizeof(info), info_len);
 
 	info.type = map->map_type;
-//	info.id = map->id;
+	//info.id = map->id;
 	info.key_size = map->key_size;
 	info.value_size = map->value_size;
 	info.max_entries = map->max_entries;

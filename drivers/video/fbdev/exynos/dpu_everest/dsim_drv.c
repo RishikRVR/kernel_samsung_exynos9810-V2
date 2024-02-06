@@ -26,13 +26,10 @@
 #include <linux/of_gpio.h>
 #include <linux/device.h>
 #include <linux/module.h>
-#include <linux/exynos-ss.h>
 #include <video/mipi_display.h>
 #include <soc/samsung/cal-if.h>
 #include <dt-bindings/clock/exynos9810.h>
-#if defined(CONFIG_ION_EXYNOS)
 #include <linux/exynos_iovmm.h>
-#endif
 
 #include "decon.h"
 #include "dsim.h"
@@ -448,13 +445,16 @@ static void dsim_bts_print_info(struct bts_decon_info *info)
 static void dsim_underrun_info(struct dsim_device *dsim)
 {
 #if defined(CONFIG_EXYNOS9810_BTS)
-	struct decon_device *decon;
+	struct decon_device *decon = get_decon_drvdata(0);
 	int i;
 
 	dsim_info("\tMIF(%lu), INT(%lu), DISP(%lu)\n",
 			cal_dfs_get_rate(ACPM_DVFS_MIF),
 			cal_dfs_get_rate(ACPM_DVFS_INT),
 			cal_dfs_get_rate(ACPM_DVFS_DISP));
+
+	if (decon == NULL)
+ 		return;
 
 	for (i = 0; i < MAX_DECON_CNT; ++i) {
 		decon = get_decon_drvdata(i);
@@ -983,8 +983,6 @@ static int dsim_enter_ulps(struct dsim_device *dsim)
 
 	DPU_EVENT_START();
 	dsim_dbg("%s +\n", __func__);
-	exynos_ss_printk("%s:state %d: active %d:+\n", __func__,
-				dsim->state, pm_runtime_active(dsim->dev));
 
 	if (!IS_DSIM_ON_STATE(dsim)) {
 		ret = -EBUSY;
@@ -1017,8 +1015,6 @@ static int dsim_enter_ulps(struct dsim_device *dsim)
 	DPU_EVENT_LOG(DPU_EVT_ENTER_ULPS, &dsim->sd, start);
 err:
 	dsim_dbg("%s -\n", __func__);
-	exynos_ss_printk("%s:state %d: active %d:-\n", __func__,
-				dsim->state, pm_runtime_active(dsim->dev));
 
 	return ret;
 }
@@ -1029,8 +1025,6 @@ static int dsim_exit_ulps(struct dsim_device *dsim)
 
 	DPU_EVENT_START();
 	dsim_dbg("%s +\n", __func__);
-	exynos_ss_printk("%s:state %d: active %d:+\n", __func__,
-				dsim->state, pm_runtime_active(dsim->dev));
 
 	if (dsim->state != DSIM_STATE_ULPS) {
 		ret = -EBUSY;
@@ -1082,8 +1076,6 @@ static int dsim_exit_ulps(struct dsim_device *dsim)
 	DPU_EVENT_LOG(DPU_EVT_EXIT_ULPS, &dsim->sd, start);
 err:
 	dsim_dbg("%s -\n", __func__);
-	exynos_ss_printk("%s:state %d: active %d:-\n", __func__,
-				dsim->state, pm_runtime_active(dsim->dev));
 
 	return 0;
 }
@@ -1276,6 +1268,52 @@ int dsim_create_cmd_rw_sysfs(struct dsim_device *dsim)
 	return ret;
 }
 
+static int dsim_calc_slice_width(u32 dsc_cnt, u32 slice_num, u32 xres)
+{
+	u32 slice_width;
+	u32 width_eff;
+	u32 slice_width_byte_unit, comp_slice_width_byte_unit;
+	u32 comp_slice_width_pixel_unit;
+	u32 compressed_slice_w = 0;
+	u32 i, j;
+
+	if (dsc_cnt == 2)
+		width_eff = xres >> 1;
+	else
+		width_eff = xres;
+
+	if (slice_num / dsc_cnt == 2)
+		slice_width = width_eff >> 1;
+	else
+		slice_width = width_eff;
+
+	/* 3bytes per pixel */
+	slice_width_byte_unit = slice_width * 3;
+	/* integer value, /3 for 1/3 compression */
+	comp_slice_width_byte_unit = slice_width_byte_unit / 3;
+	/* integer value, /3 for pixel unit */
+	comp_slice_width_pixel_unit = comp_slice_width_byte_unit / 3;
+
+	i = comp_slice_width_byte_unit % 3;
+	j = comp_slice_width_pixel_unit % 2;
+
+	if (i == 0 && j == 0) {
+		compressed_slice_w = comp_slice_width_pixel_unit;
+	} else if (i == 0 && j != 0) {
+		compressed_slice_w = comp_slice_width_pixel_unit + 1;
+	} else if (i != 0) {
+		while (1) {
+			comp_slice_width_pixel_unit++;
+			j = comp_slice_width_pixel_unit % 2;
+			if (j == 0)
+				break;
+		}
+		compressed_slice_w = comp_slice_width_pixel_unit;
+	}
+
+	return compressed_slice_w;
+}
+
 void parse_lcd_info(struct device_node *node, struct decon_lcd *lcd_info)
 {
 	u32 res[14];
@@ -1285,6 +1323,8 @@ void parse_lcd_info(struct device_node *node, struct decon_lcd *lcd_info)
 	u32 mres_dsc_w[3] = {0, };
 	u32 mres_dsc_h[3] = {0, };
 	u32 mres_dsc_en[3] = {0, };
+	u32 mres_partial_w[3] = {0, };
+	u32 mres_partial_h[3] = {0, };
 	u32 hdr_num = 0;
 	u32 hdr_type[HDR_CAPA_NUM] = {0, };
 	u32 hdr_mxl = 0;
@@ -1374,7 +1414,18 @@ void parse_lcd_info(struct device_node *node, struct decon_lcd *lcd_info)
 		of_property_read_u32(node, "dsc_slice_h",
 				&lcd_info->dsc_slice_h);
 		dsim_info("dsc slice height(%d)\n", lcd_info->dsc_slice_h);
+
+		lcd_info->dsc_enc_sw = dsim_calc_slice_width(lcd_info->dsc_cnt,
+					lcd_info->dsc_slice_num, lcd_info->xres);
+		lcd_info->dsc_dec_sw = lcd_info->xres / lcd_info->dsc_slice_num;
+		dsim_info("dsc enc_sw(%d), dec_sw(%d)\n",
+				lcd_info->dsc_enc_sw, lcd_info->dsc_dec_sw);
 	}
+
+	of_property_read_u32(node, "partial_width", &lcd_info->partial_width[0]);
+	of_property_read_u32(node, "partial_height", &lcd_info->partial_height[0]);
+
+	dsim_info("partial w * h = %d * %d\n", lcd_info->partial_width[0], lcd_info->partial_height[0]);
 
 	of_property_read_u32(node, "data_lane", &lcd_info->data_lane);
 	dsim_info("using data lane count(%d)\n", lcd_info->data_lane);
@@ -1394,6 +1445,8 @@ void parse_lcd_info(struct device_node *node, struct decon_lcd *lcd_info)
 		of_property_read_u32_array(node, "mres_dsc_width", mres_dsc_w, mres_num);
 		of_property_read_u32_array(node, "mres_dsc_height", mres_dsc_h, mres_num);
 		of_property_read_u32_array(node, "mres_dsc_en", mres_dsc_en, mres_num);
+		of_property_read_u32_array(node, "mres_partial_width", mres_partial_w, mres_num);
+		of_property_read_u32_array(node, "mres_partial_height", mres_partial_h, mres_num);
 
 		switch (mres_num) {
 		case 3:
@@ -1402,18 +1455,39 @@ void parse_lcd_info(struct device_node *node, struct decon_lcd *lcd_info)
 			lcd_info->dt_lcd_mres.res_info[2].dsc_en = mres_dsc_en[2];
 			lcd_info->dt_lcd_mres.res_info[2].dsc_width = mres_dsc_w[2];
 			lcd_info->dt_lcd_mres.res_info[2].dsc_height = mres_dsc_h[2];
+			lcd_info->dt_dsc_slice.dsc_enc_sw[2] =
+				dsim_calc_slice_width(lcd_info->dsc_cnt,
+						lcd_info->dsc_slice_num, mres_w[2]);
+			lcd_info->dt_dsc_slice.dsc_dec_sw[2] =
+				 mres_w[2] / lcd_info->dsc_slice_num;
+			lcd_info->partial_width[2] = mres_partial_w[2];
+			lcd_info->partial_height[2] = mres_partial_h[2];
 		case 2:
 			lcd_info->dt_lcd_mres.res_info[1].width = mres_w[1];
 			lcd_info->dt_lcd_mres.res_info[1].height = mres_h[1];
 			lcd_info->dt_lcd_mres.res_info[1].dsc_en = mres_dsc_en[1];
 			lcd_info->dt_lcd_mres.res_info[1].dsc_width = mres_dsc_w[1];
 			lcd_info->dt_lcd_mres.res_info[1].dsc_height = mres_dsc_h[1];
+			lcd_info->dt_dsc_slice.dsc_enc_sw[1] =
+				dsim_calc_slice_width(lcd_info->dsc_cnt,
+						lcd_info->dsc_slice_num, mres_w[1]);
+			lcd_info->dt_dsc_slice.dsc_dec_sw[1] =
+				 mres_w[1] / lcd_info->dsc_slice_num;
+			lcd_info->partial_width[1] = mres_partial_w[1];
+			lcd_info->partial_height[1] = mres_partial_h[1];
 		case 1:
 			lcd_info->dt_lcd_mres.res_info[0].width = mres_w[0];
 			lcd_info->dt_lcd_mres.res_info[0].height = mres_h[0];
 			lcd_info->dt_lcd_mres.res_info[0].dsc_en = mres_dsc_en[0];
 			lcd_info->dt_lcd_mres.res_info[0].dsc_width = mres_dsc_w[0];
 			lcd_info->dt_lcd_mres.res_info[0].dsc_height = mres_dsc_h[0];
+			lcd_info->dt_dsc_slice.dsc_enc_sw[0] =
+				dsim_calc_slice_width(lcd_info->dsc_cnt,
+						lcd_info->dsc_slice_num, mres_w[0]);
+			lcd_info->dt_dsc_slice.dsc_dec_sw[0] =
+				 mres_w[0] / lcd_info->dsc_slice_num;
+			lcd_info->partial_width[0] = mres_partial_w[0];
+			lcd_info->partial_height[0] = mres_partial_h[0];
 			break;
 		default:
 			lcd_info->dt_lcd_mres.res_info[0].width = lcd_info->width;
@@ -1425,8 +1499,13 @@ void parse_lcd_info(struct device_node *node, struct decon_lcd *lcd_info)
 				mres_num, mres_w[0], mres_h[0],
 				mres_w[1], mres_h[1], mres_w[2], mres_h[2]);
 	} else {
-		lcd_info->dt_lcd_mres.res_info[0].width = lcd_info->width;
-		lcd_info->dt_lcd_mres.res_info[0].height = lcd_info->height;
+		lcd_info->dt_lcd_mres.res_info[0].width = lcd_info->xres;
+		lcd_info->dt_lcd_mres.res_info[0].height = lcd_info->yres;
+		lcd_info->dt_lcd_mres.res_info[0].dsc_en = lcd_info->dsc_enabled;
+		if (lcd_info->dsc_enabled && lcd_info->dsc_slice_num != 0) {
+			lcd_info->dt_lcd_mres.res_info[0].dsc_width = lcd_info->xres / lcd_info->dsc_slice_num;
+			lcd_info->dt_lcd_mres.res_info[0].dsc_height = lcd_info->dsc_slice_h;
+		}
 	}
 
 	if (lcd_info->mode == DECON_MIPI_COMMAND_MODE) {
@@ -1511,18 +1590,10 @@ static void dsim_register_panel(struct dsim_device *dsim)
 {
 #if IS_ENABLED(CONFIG_EXYNOS_COMMON_PANEL)
 	dsim->panel_ops = &common_mipi_lcd_driver;
-#elif IS_ENABLED(CONFIG_EXYNOS_DECON_LCD_S6E3HA2K)
-	dsim->panel_ops = &s6e3ha2k_mipi_lcd_driver;
-#elif IS_ENABLED(CONFIG_EXYNOS_DECON_LCD_S6E3HF4)
-	dsim->panel_ops = &s6e3hf4_mipi_lcd_driver;
-#elif IS_ENABLED(CONFIG_EXYNOS_DECON_LCD_S6E3HA6)
-	dsim->panel_ops = &s6e3ha6_mipi_lcd_driver;
 #elif IS_ENABLED(CONFIG_EXYNOS_DECON_LCD_S6E3HA8)
 	dsim->panel_ops = &s6e3ha8_mipi_lcd_driver;
 #elif IS_ENABLED(CONFIG_EXYNOS_DECON_LCD_EMUL_DISP)
 	dsim->panel_ops = &emul_disp_mipi_lcd_driver;
-#else
-	dsim->panel_ops = &s6e3ha2k_mipi_lcd_driver;
 #endif
 }
 
@@ -1643,14 +1714,12 @@ static int dsim_probe(struct platform_device *pdev)
 
 	pm_runtime_enable(dev);
 
-#if defined(CONFIG_ION_EXYNOS)
 	ret = iovmm_activate(dev);
 	if (ret) {
 		dsim_err("failed to activate iovmm\n");
 		goto err_dt;
 	}
 	iovmm_set_fault_handler(dev, dpu_sysmmu_fault_handler, NULL);
-#endif
 
 	ret = dsim_get_data_lanes(dsim);
 	if (ret)

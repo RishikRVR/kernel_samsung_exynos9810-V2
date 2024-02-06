@@ -31,7 +31,11 @@ static inline void dpu_event_log_decon
 
 	log = &decon->d.event_log[idx];
 
+#if defined(CONFIG_SUPPORT_KERNEL_4_9)
 	if (time.tv64)
+#else
+	if (time)
+#endif
 		log->time = time;
 	else
 		log->time = ktime_get();
@@ -50,8 +54,13 @@ static inline void dpu_event_log_decon
 	case DPU_EVT_TRIG_MASK:
 	case DPU_EVT_FENCE_RELEASE:
 	case DPU_EVT_DECON_FRAMEDONE:
+#if defined(CONFIG_SUPPORT_LEGACY_FENCE)
 		log->data.fence.timeline_value = decon->timeline->value;
 		log->data.fence.timeline_max = decon->timeline_max;
+#else
+		log->data.fence.timeline_value = atomic_read(&decon->fence.timeline);
+		log->data.fence.timeline_max = atomic_read(&decon->fence.timeline);
+#endif
 		break;
 	case DPU_EVT_WB_SW_TRIGGER:
 		break;
@@ -84,7 +93,11 @@ static inline void dpu_event_log_dsim
 
 	log = &decon->d.event_log[idx];
 
+#if defined(CONFIG_SUPPORT_KERNEL_4_9)
 	if (time.tv64)
+#else
+	if (time)
+#endif
 		log->time = time;
 	else
 		log->time = ktime_get();
@@ -139,7 +152,11 @@ static inline void dpu_event_log_dpp
 
 	log = &decon->d.event_log[idx];
 
+#if defined(CONFIG_SUPPORT_KERNEL_4_9)
 	if (time.tv64)
+#else
+	if (time)
+#endif
 		log->time = time;
 	else
 		log->time = ktime_get();
@@ -692,7 +709,7 @@ static int decon_debug_dump_show(struct seq_file *s, void *unused)
 		decon_info("%s: decon is not ON(%d)\n", __func__, decon->state);
 		return 0;
 	}
-	decon_dump(decon, REQ_DSI_DUMP);
+	decon_dump(decon);
 	return 0;
 }
 

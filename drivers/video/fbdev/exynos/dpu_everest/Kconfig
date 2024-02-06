@@ -87,11 +87,6 @@ config DECON_BTS_LEGACY
         depends on EXYNOS_EVEREST
         default n
 
-config DPU_2_0_FENCE
-	bool "fence is signaled at the beginning of a frame"
-        depends on EXYNOS_EVEREST
-        default n
-
 config FB_TEST
 	bool "FB test only"
         depends on EXYNOS_EVEREST
@@ -101,12 +96,6 @@ config DSIM_CMD_TEST
 	bool "DSIM command test only"
         depends on EXYNOS_EVEREST
         default n
-
-config DPU_2_0_RELEASE_FENCES
-	bool "Release fence FD is created per each enable window"
-        depends on EXYNOS_EVEREST
-        default n
-
 
 config SUPPORT_DSU
 	tristate "Support Dynamic Scale Up (Multi-Resolution)"
@@ -127,7 +116,16 @@ config EXYNOS_EVEREST_DEBUG
 	depends on EXYNOS_EVEREST
 	default y
 
+config SUPPORT_LEGACY_FENCE
+	bool "Support legacy fence API"
+	depends on EXYNOS_EVEREST
+	default y
+
+config SUPPORT_KERNEL_4_9
+	bool "Support kernel version 4.9"
+	depends on EXYNOS_EVEREST
+	default y
+
 endif
 
 source "drivers/video/fbdev/exynos/dpu_everest/panels/Kconfig"
-source "drivers/video/fbdev/exynos/dpu_everest/dp_logger/Kconfig"

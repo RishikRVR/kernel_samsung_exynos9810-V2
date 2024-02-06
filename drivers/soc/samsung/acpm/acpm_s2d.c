@@ -17,7 +17,6 @@
 #include <soc/samsung/acpm_ipc_ctrl.h>
 #include <linux/debugfs.h>
 #include <linux/slab.h>
-#include <linux/exynos-ss.h>
 #include <soc/samsung/exynos-pmu.h>
 
 #define RESET_SEQUENCER_CONFIGURATION		(0x0500)
@@ -30,9 +29,9 @@ extern void dfd_set_dump_gpr(int en);
 extern void little_reset_control(int en);
 extern void big_reset_control(int en);
 #else
-#define dfd_set_dump_gpr(a)		do { } while (0)
-#define little_reset_control(a)		do { } while (0)
-#define big_reset_control(a)		do { } while (0)
+#define dfd_set_dump_gpr(a)            do { } while(0)
+#define little_reset_control(a)                do { } while(0)
+#define big_reset_control(a)           do { } while(0)
 #endif
 
 #define DEFAULT_S2D_BLOCK		(0xFFFFF3BF)
@@ -78,7 +77,6 @@ int exynos_acpm_s2d_update_en(void)
 	config.cmd = cmd;
 	config.response = true;
 	config.indirection = false;
-	config.cmd[1] = exynos_ss_get_item_paddr("log_s2d");
 	if (s2d_en)
 		config.cmd[2] = s2d_sel_block;
 	else

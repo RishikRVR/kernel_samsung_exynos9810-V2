@@ -1473,6 +1473,7 @@ static int panel_set_mres(struct panel_device *panel, int *mres_idx)
 	struct panel_state *state;
 	struct decon_lcd *lcd_info;
 	struct lcd_mres_info *dt_lcd_mres;
+	struct dsc_slice *dsc_slice_info;
 
 	if (unlikely(!panel)) {
 		panel_err("PANEL:ERR:%s:panel is null\n", __func__);
@@ -1483,6 +1484,7 @@ static int panel_set_mres(struct panel_device *panel, int *mres_idx)
 	state = &panel->state;
 	lcd_info = &panel->lcd_info;
 	dt_lcd_mres = &lcd_info->dt_lcd_mres;
+	dsc_slice_info = &lcd_info->dt_dsc_slice;
 	if (dt_lcd_mres->mres_en == 0) {
 		panel_err("PANEL:ERR:%s:multi-resolution unsupported!!\n",
 			__func__);
@@ -1502,11 +1504,17 @@ static int panel_set_mres(struct panel_device *panel, int *mres_idx)
 	lcd_info->yres = dt_lcd_mres->res_info[actual_mode].height;
 	lcd_info->dsc_enabled = dt_lcd_mres->res_info[actual_mode].dsc_en;
 	lcd_info->dsc_slice_h = dt_lcd_mres->res_info[actual_mode].dsc_height;
+	lcd_info->dsc_dec_sw = dsc_slice_info->dsc_dec_sw[actual_mode];
+	lcd_info->dsc_enc_sw = dsc_slice_info->dsc_enc_sw[actual_mode];
 
 	if (lcd_info->dsc_enabled)
 		panel_info("PANEL:INFO:%s: dsu mode:%d, resol:%dx%d, dsc:%s, slice_h:%d\n",
 			__func__, lcd_info->mres_mode, lcd_info->xres, lcd_info->yres,
 			lcd_info->dsc_enabled ? "on" : "off", lcd_info->dsc_slice_h);
+	else
+		panel_info("PANEL:INFO:%s: dsu mode:%d, resol:%dx%d, dsc:%s, partial WxH:%dx%d\n",
+			__func__, lcd_info->mres_mode, lcd_info->xres, lcd_info->yres,
+			lcd_info->dsc_enabled ? "on" : "off", lcd_info->partial_width[actual_mode], lcd_info->partial_height[actual_mode]);
 
 	panel->panel_data.props.mres_updated = true;
 	ret = panel_do_seqtbl_by_index(panel, PANEL_DSU_SEQ);
@@ -1706,6 +1714,9 @@ static int panel_set_finger_layer(struct panel_device *panel, void *arg)
 static long panel_core_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	int ret = 0;
+#ifdef CONFIG_PANEL_GREEN_SCREEN_WORKAROUND
+	int fix_green_screen = 0;
+#endif
 	struct panel_device *panel = container_of(sd, struct panel_device, sd);
 
 	mutex_lock(&panel->io_lock);
@@ -1790,8 +1801,34 @@ static long panel_core_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg
 			panel_info("PANEL:INFO:%s:FRAME_DONE (panel_state:%s, display on)\n",
 					__func__, panel_state_names[panel->state.cur_state]);
 			ret = panel_display_on(panel);
+#ifdef CONFIG_PANEL_GREEN_SCREEN_WORKAROUND
+			if (!ret && panel->state.cur_state != PANEL_STATE_ALPM) {
+				fix_green_screen = 1;
+			}
+#endif
 		}
 		copr_update_start(&panel->copr, 3);
+
+#ifdef CONFIG_SUPPORT_DOZE
+#ifdef CONFIG_PANEL_GREEN_SCREEN_WORKAROUND
+		if (fix_green_screen) {
+			ret = panel_doze(panel, PANEL_IOC_DOZE);
+			if (ret) {
+				panel_err("PANEL:ERR:%s:failed to enter alpm\n",
+					__func__);
+				break;
+			}
+			// sleep 126msec (ALPM spec)
+			usleep_range(126 * 1000, 126 * 1000 + 10);
+			ret = panel_sleep_out(panel);
+			if (ret) {
+				panel_err("PANEL:ERR:%s:failed to panel exit alpm\n",
+					__func__);
+				break;
+			}
+		}
+#endif
+#endif
 		break;
 	case PANEL_IOC_EVT_VSYNC:
 		//panel_dbg("PANEL:INFO:%s:PANEL_IOC_EVT_VSYNC\n", __func__);

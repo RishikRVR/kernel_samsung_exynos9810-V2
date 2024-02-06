@@ -19,7 +19,7 @@
 #include <linux/list.h>
 #include <linux/wait.h>
 #include <linux/slab.h>
-#include <linux/exynos-ss.h>
+#include <soc/samsung/exynos-condbg.h>
 
 #include "acpm.h"
 #include "acpm_ipc.h"
@@ -37,6 +37,12 @@ struct regulator_ss_info regulator_ss[REGULATOR_SS_MAX];
 char reg_map[0x100] = {0};
 bool is_set_regmap = false;
 
+static bool is_rt_dl_task_policy(void)
+{
+	return current->policy == SCHED_FIFO || current->policy == SCHED_RR
+		|| current->policy == SCHED_DEADLINE;
+}
+
 void acpm_ipc_set_waiting_mode(bool mode)
 {
 	acpm_ipc->w_mode = mode;
@@ -49,10 +55,6 @@ void acpm_fw_log_level(unsigned int on)
 
 void acpm_ramdump(void)
 {
-#ifdef CONFIG_EXYNOS_SNAPSHOT_ACPM
-	if (acpm_debug->dump_size)
-		memcpy(acpm_debug->dump_dram_base, acpm_debug->dump_base, acpm_debug->dump_size);
-#endif
 }
 
 void timestamp_write(void)
@@ -179,18 +181,7 @@ void acpm_log_print(void)
 				reg_id = NO_SET_REGMAP;
 			else
 				reg_id = get_reg_id(val >> 12);
-
-			if (reg_id == NO_SS_RANGE)
-				exynos_ss_regulator(time, "outSc", val >> 12, (val >> 4) & 0xFF, (val >> 4) & 0xFF, val & 0xF);
-			else if (reg_id == NO_SET_REGMAP)
-				exynos_ss_regulator(time, "noMap", val >> 12, (val >> 4) & 0xFF, (val >> 4) & 0xFF, val & 0xF);
-			else
-				exynos_ss_regulator(time, regulator_ss[reg_id].name, val >> 12,
-						get_reg_voltage(regulator_ss[reg_id], (val >> 4) & 0xFF),
-						(val >> 4) & 0xFF,
-						val & 0xF);
 		}
-		exynos_ss_acpm(time, str, val);
 
 		if (acpm_debug->debug_log_level == 1 || !log_level)
 			pr_info("[ACPM_FW] : %llu id:%u, %s, %x\n", time, id, str, val);
@@ -325,7 +316,7 @@ static bool check_response(struct acpm_ipc_ch *channel, struct ipc_config *cfg)
 	unsigned int rear;
 	struct list_head *cb_list = &channel->list;
 	struct callback_info *cb;
-	unsigned int data;
+	unsigned int tmp_seq_num;
 	bool ret = true;
 	unsigned int i;
 
@@ -337,10 +328,10 @@ static bool check_response(struct acpm_ipc_ch *channel, struct ipc_config *cfg)
 	i = rear;
 
 	while (i != front) {
-		data = __raw_readl(channel->rx_ch.base + channel->rx_ch.size * i);
-		data = (data >> ACPM_IPC_PROTOCOL_SEQ_NUM) & 0x3f;
+		tmp_seq_num = __raw_readl(channel->rx_ch.base + channel->rx_ch.size * i);
+		tmp_seq_num = (tmp_seq_num >> ACPM_IPC_PROTOCOL_SEQ_NUM) & 0x3f;
 
-		if (data == ((cfg->cmd[0] >> ACPM_IPC_PROTOCOL_SEQ_NUM) & 0x3f)) {
+		if (tmp_seq_num == ((cfg->cmd[0] >> ACPM_IPC_PROTOCOL_SEQ_NUM) & 0x3f)) {
 			memcpy_align_4(cfg->cmd, channel->rx_ch.base + channel->rx_ch.size * i,
 					channel->rx_ch.size);
 			memcpy_align_4(channel->cmd, channel->rx_ch.base + channel->rx_ch.size * i,
@@ -373,6 +364,7 @@ static bool check_response(struct acpm_ipc_ch *channel, struct ipc_config *cfg)
 				}
 			}
 			ret = false;
+			channel->seq_num_flag[tmp_seq_num] = 0;
 			break;
 		}
 		i++;
@@ -541,7 +533,7 @@ int acpm_ipc_send_data_sync(unsigned int channel_id, struct ipc_config *cfg)
 	return ret;
 }
 
-int acpm_ipc_send_data(unsigned int channel_id, struct ipc_config *cfg)
+int __acpm_ipc_send_data(unsigned int channel_id, struct ipc_config *cfg, bool w_mode)
 {
 	unsigned int front;
 	unsigned int rear;
@@ -551,6 +543,8 @@ int acpm_ipc_send_data(unsigned int channel_id, struct ipc_config *cfg)
 	int ret;
 	u64 timeout, now;
 	u32 retry_cnt = 0;
+	u32 tmp_seq_num;
+	u32 seq_cnt = 0;
 
 	if (channel_id >= acpm_ipc->num_channels && !cfg)
 		return -EIO;
@@ -582,9 +576,29 @@ int acpm_ipc_send_data(unsigned int channel_id, struct ipc_config *cfg)
 		return -EIO;
 	}
 
-	if (++channel->seq_num == 64)
-		channel->seq_num = 1;
+	tmp_seq_num = channel->seq_num;
+	do {
+		if (unlikely(tmp_seq_num != channel->seq_num)) {
+			pr_warn("ACPM IPC] [ACPM_IPC] channel:%d, cmd:0x%x, 0x%x, 0x%x, 0x%x",
+					channel->id, cfg->cmd[0], cfg->cmd[1],
+					cfg->cmd[2], cfg->cmd[3]);
+			WARN(1, "[ACPM IPC] duplicate assignment: sequence number:%d, tmp_seq_num:%d, flag:0x%x",
+					channel->seq_num, tmp_seq_num, channel->seq_num_flag[tmp_seq_num]);
+		}
 
+		if (++tmp_seq_num == SEQUENCE_NUM_MAX)
+			tmp_seq_num = 1;
+		
+		if (unlikely(seq_cnt++ == SEQUENCE_NUM_MAX)) {
+			pr_err("[ACPM IPC] sequence number full! error!!!\n");
+			BUG();
+		}
+	} while (channel->seq_num_flag[tmp_seq_num]);
+
+	channel->seq_num = tmp_seq_num;
+	channel->seq_num_flag[channel->seq_num] = cfg->cmd[0] | (0x1 << 31);
+
+	cfg->cmd[0] &= ~(0x3f << ACPM_IPC_PROTOCOL_SEQ_NUM);
 	cfg->cmd[0] |= (channel->seq_num & 0x3f) << ACPM_IPC_PROTOCOL_SEQ_NUM;
 
 	memcpy_align_4(channel->tx_ch.base + channel->tx_ch.size * front, cfg->cmd,
@@ -615,20 +629,25 @@ retry:
 				check_response(channel, cfg)) {
 			now = sched_clock();
 			if (timeout < now) {
-				if (retry_cnt++ < 5) {
-					pr_err("acpm_ipc timeout retry %d"
+				if (retry_cnt > 5) {
+					timeout_flag = true;
+					break;
+				} else if (retry_cnt > 0) {
+					pr_err("acpm_ipc timeout retry %d "
 						"now = %llu,"
 						"timeout = %llu\n",
 						retry_cnt, now, timeout);
+					++retry_cnt;
 					goto retry;
+				} else {
+					++retry_cnt;
+					continue;
 				}
-				timeout_flag = true;
-				break;
 			} else {
-				if (acpm_ipc->w_mode)
+				if (w_mode)
 					usleep_range(50, 100);
 				else
-					cpu_relax();
+					udelay(10);
 			}
 		}
 
@@ -652,8 +671,8 @@ retry:
 			acpm_debug->debug_log_level = 0;
 			acpm_ramdump();
 
-			BUG_ON(timeout_flag);
-			return -ETIMEDOUT;
+			msleep(1000);
+			s3c2410wdt_set_emergency_reset(0, 0);
 		}
 
 		queue_work(update_log_wq, &acpm_debug->update_log_work);
@@ -709,15 +728,31 @@ static void log_buffer_init(struct device *dev, struct device_node *node)
 	if (prop)
 		acpm_debug->period = be32_to_cpup(prop);
 
-#ifdef CONFIG_EXYNOS_SNAPSHOT_ACPM
-	acpm_debug->dump_dram_base = kzalloc(acpm_debug->dump_size, GFP_KERNEL);
-	exynos_ss_printk("[ACPM] acpm framework SRAM dump to dram base: 0x%x\n",
-			virt_to_phys(acpm_debug->dump_dram_base));
-#endif
 	pr_info("[ACPM] acpm framework SRAM dump to dram base: 0x%llx\n",
 			virt_to_phys(acpm_debug->dump_dram_base));
 
 	spin_lock_init(&acpm_debug->lock);
+}
+
+int acpm_ipc_send_data(unsigned int channel_id, struct ipc_config *cfg)
+{
+	int ret;
+
+	ret = __acpm_ipc_send_data(channel_id, cfg, false);
+
+	return ret;
+}
+
+int acpm_ipc_send_data_lazy(unsigned int channel_id, struct ipc_config *cfg)
+{
+	int ret;
+
+	if (is_rt_dl_task_policy())
+		ret = __acpm_ipc_send_data(channel_id, cfg, true);
+	else
+		ret = __acpm_ipc_send_data(channel_id, cfg, false);
+
+	return ret;
 }
 
 static int channel_init(void)

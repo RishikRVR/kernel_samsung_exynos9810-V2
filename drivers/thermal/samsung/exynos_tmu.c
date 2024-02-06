@@ -42,7 +42,6 @@
 #include <linux/isp_cooling.h>
 #include <linux/slab.h>
 #include <linux/debugfs.h>
-#include <linux/exynos-ss.h>
 #include <linux/soc/samsung/exynos-soc.h>
 #include <soc/samsung/exynos-cpu_hotplug.h>
 #include <soc/samsung/tmu.h>
@@ -225,6 +224,10 @@ static bool suspended;
 static DEFINE_MUTEX (thermal_suspend_lock);
 #endif
 static bool is_cpu_hotplugged_out;
+
+#define LITTLE_CPU_SHIFT 2 /* Shift little thermal freqs this times */
+
+extern unsigned long arg_cpu_max_c1;
 
 /* list of multiple instance for each thermal sensor */
 static LIST_HEAD(dtm_dev_list);
@@ -677,7 +680,6 @@ static int exynos_get_temp(void *p, int *temp)
 	mutex_unlock(&thermal_suspend_lock);
 #endif
 
-	exynos_ss_thermal(data->pdata, *temp / 1000, data->tmu_name, 0);
 #ifdef CONFIG_EXYNOS_MCINFO
 	if (data->id == 0) {
 		mcinfo_count = get_mcinfo_base_count();
@@ -689,9 +691,6 @@ static int exynos_get_temp(void *p, int *temp)
 			if (mcinfo_result[i] >= MCINFO_LOG_THRESHOLD)
 				mcinfo_logging = 1;
 		}
-
-		if (mcinfo_logging == 1)
-			exynos_ss_thermal(NULL, mcinfo_temp, "MCINFO", 0);
 	}
 #endif
 	return 0;
@@ -867,6 +866,9 @@ static int exynos9810_tmu_read(struct exynos_tmu_data *data)
 #ifdef CONFIG_EXYNOS_ACPM_THERMAL
 	exynos_acpm_tmu_set_read_temp(data->tzd->id, &temp, &stat);
 #endif
+
+	if (exynos_cpufreq_get_unlock_freqs_status())
+		stat = 0;
 
 	if (data->hotplug_enable) {
 		if ((stat == 2) && !cpufreq_limited) {
@@ -1162,7 +1164,7 @@ static int exynos_throttle_cpu_hotplug(void *p, int temp)
 	temp = temp / MCELSIUS;
 
 	if (is_cpu_hotplugged_out) {
-		if (temp < data->hotplug_in_threshold) {
+		if (exynos_cpufreq_get_unlock_freqs_status() || temp < data->hotplug_in_threshold) {
 			/*
 			 * If current temperature is lower than low threshold,
 			 * call cluster1_cores_hotplug(false) for hotplugged out cpus.
@@ -1172,7 +1174,7 @@ static int exynos_throttle_cpu_hotplug(void *p, int temp)
 			is_cpu_hotplugged_out = false;
 		}
 	} else {
-		if (temp >= data->hotplug_out_threshold) {
+		if (!exynos_cpufreq_get_unlock_freqs_status() && temp >= data->hotplug_out_threshold) {
 			/*
 			 * If current temperature is higher than high threshold,
 			 * call cluster1_cores_hotplug(true) to hold temperature down.
@@ -1403,7 +1405,19 @@ static int exynos_tmu_parse_ect(struct exynos_tmu_data *data)
 
 		__tz->ntrips = __tz->num_tbps = function->num_of_range;
 		pr_info("Trip count parsed from ECT : %d, zone : %s", function->num_of_range, tz->type);
+		
+		/* increase little cpu thermal values */
+		if (ect_strcmp(function->function_name, "LITTLE") == 0) {
+			int s;
 
+			for (s = 0; s < LITTLE_CPU_SHIFT; ++s) {
+				for (i = function->num_of_range-3; i > -1; --i) /* one -1 from function, one -1 from range list calculation, one -1 from not touching last */
+					function->range_list[i+1].max_frequency = function->range_list[i].max_frequency;
+
+			function->range_list[s].max_frequency = arg_cpu_max_c1;
+			}
+		}
+		
 		for (i = 0; i < function->num_of_range; ++i) {
 			temperature = function->range_list[i].lower_bound_temperature;
 			freq = function->range_list[i].max_frequency;
