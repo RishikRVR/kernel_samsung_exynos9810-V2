@@ -410,6 +410,20 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Wno-format-security \
 		   -Werror \
 		   -std=gnu89
+
+ifeq ($(CONFIG_SOC_EXYNOS9810), y)
+KBUILD_CFLAGS	+= -mcpu=exynos-m3+crypto+crc+simd
+KBUILD_LDFLAGS	+= -mcpu=exynos-m3+crypto+crc+simd
+KBUILD_CFLAGS	+= -mfloat-abi=hard
+KBUILD_LDFLAGS	+= -mfloat-abi=hard
+endif
+
+ifeq ($(cc-name),clang)
+KBUILD_CFLAGS	+= -DCONFIG_ARCH_SUPPORTS_INT128
+else
+KBUILD_CFLAGS	+= $(call cc-ifversion, -ge, 0500, -DCONFIG_ARCH_SUPPORTS_INT128)
+endif
+
 KBUILD_CPPFLAGS := -D__KERNEL__
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
