@@ -736,7 +736,9 @@ endif
 ifdef CONFIG_LTO_CLANG
 # Limit inlining across translation units to reduce binary size
 LD_FLAGS_LTO_CLANG := -mllvm -import-instr-limit=5
-
+ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_UNSAFE
+LD_FLAGS_LTO_CLANG := -mllvm --lto-O3
+endif
 ifdef CONFIG_THINLTO
 lto-clang-flags := -flto=thin
 else
@@ -796,6 +798,28 @@ DISABLE_LTO	+= $(DISABLE_CFI)
 export DISABLE_CFI
 endif
 
+KBUILD_CFLAGS	+= -mllvm -aggressive-ext-opt \
+           -mllvm -enable-cond-stores-vec \
+           -mllvm -slp-vectorize-hor-store \
+           -mllvm -adce-remove-loops \
+           -mllvm -enable-cse-in-irtranslator \
+           -mllvm -enable-cse-in-legalizer \
+           -mllvm -scalar-evolution-use-expensive-range-sharpening \
+           -mllvm -loop-rotate-multi \
+           -mllvm -enable-interleaved-mem-accesses \
+           -mllvm -enable-masked-interleaved-mem-accesses \
+           -mllvm -enable-gvn-hoist \
+           -mllvm -enable-dfa-jump-thread \
+           -mllvm -allow-unroll-and-jam \
+           -mllvm -enable-loop-distribute \
+           -mllvm -enable-loop-flatten \
+           -mllvm -enable-loopinterchange \
+           -mllvm -enable-unroll-and-jam \
+           -mllvm -extra-vectorizer-passes \
+           -mllvm -interleave-small-loop-scalar-reduction \
+           -mllvm -unroll-runtime-multi-exit \
+           -mllvm -hot-cold-split=true
+
 ifdef CONFIG_LLVM_POLLY
 KBUILD_CFLAGS	+= -mllvm -polly \
 		   -mllvm -polly-run-dce \
@@ -804,14 +828,28 @@ KBUILD_CFLAGS	+= -mllvm -polly \
 		   -mllvm -polly-detect-keep-going \
 		   -mllvm -polly-vectorizer=stripmine \
 		   -mllvm -polly-invariant-load-hoisting \
-		   -mllvm -polly-isl-arg=--no-schedule-serialize-sccs
+		   -mllvm -polly-optimizer=isl \
+		   -mllvm -polly-isl-arg=--no-schedule-serialize-sccs \
+           -mllvm -polly-dependences-analysis-type=value-based \
+           -mllvm -polly-dependences-computeout=0 \
+           -mllvm -polly-enable-delicm \
+           -mllvm -polly-loopfusion-greedy \
+           -mllvm -polly-num-threads=0 \
+           -mllvm -polly-omp-backend=LLVM \
+           -mllvm -polly-parallel \
+           -mllvm -polly-postopts \
+           -mllvm -polly-reschedule \
+           -mllvm -polly-scheduling-chunksize=1 \
+           -mllvm -polly-scheduling=dynamic \
+           -mllvm -polly-tiling
 endif
 
-ifdef CONFIG_SHADOW_CALL_STACK
-scs-flags	:= -fsanitize=shadow-call-stack
-KBUILD_CFLAGS	+= $(scs-flags)
-DISABLE_SCS	:= -fno-sanitize=shadow-call-stack
-export DISABLE_SCS
+ifdef CONFIG_LLVM_MLGO_REGISTER
+# Enable MLGO for register allocation. default, release, development
+KBUILD_CFLAGS	+= -mllvm -regalloc-enable-advisor=release \
+		   -mllvm -enable-local-reassign
+KBUILD_LDFLAGS	+= -mllvm -regalloc-enable-advisor=release \
+		   -mllvm -enable-local-reassign
 endif
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
