@@ -1,5 +1,5 @@
 PATH="/home/rishik/clang/bin:${PATH}" \
-make -j4 O=~/kernel_build_output \
+make -j"$(nproc --all)" O=~/kernel_build_output \
  	ARCH=arm64 \
 	CC=clang \
  	LD=ld.lld \
