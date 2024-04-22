@@ -198,7 +198,6 @@ enum {
 	CC_INFO,	
 	BATT_JIG_GPIO,
 	EXT_EVENT,
-	BATT_FULL_CAPACITY,
 };
 
 enum {

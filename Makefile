@@ -398,9 +398,6 @@ LINUXINCLUDE    := \
 		$(if $(KBUILD_SRC), -I$(srctree)/include) \
 		-I$(objtree)/include
 
-# KSU
-LINUXINCLUDE	+= -I$(srctree)/drivers/kernelsu/include
-
 LINUXINCLUDE	+= $(filter-out $(LINUXINCLUDE),$(USERINCLUDE))
 
 KBUILD_AFLAGS   := -D__ASSEMBLY__
@@ -410,20 +407,6 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -Wno-format-security \
 		   -Werror \
 		   -std=gnu89
-
-ifeq ($(CONFIG_SOC_EXYNOS9810), y)
-KBUILD_CFLAGS	+= -mcpu=exynos-m3+crypto+crc+simd
-KBUILD_LDFLAGS	+= -mcpu=exynos-m3+crypto+crc+simd
-KBUILD_CFLAGS	+= -mfloat-abi=hard
-KBUILD_LDFLAGS	+= -mfloat-abi=hard
-endif
-
-ifeq ($(cc-name),clang)
-KBUILD_CFLAGS	+= -DCONFIG_ARCH_SUPPORTS_INT128
-else
-KBUILD_CFLAGS	+= $(call cc-ifversion, -ge, 0500, -DCONFIG_ARCH_SUPPORTS_INT128)
-endif
-
 KBUILD_CPPFLAGS := -D__KERNEL__
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
@@ -726,7 +709,6 @@ KBUILD_CFLAGS	+= $(call cc-disable-warning, format-overflow)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, int-in-bool-context)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, address-of-packed-member)
 KBUILD_CFLAGS	+= $(call cc-disable-warning, attribute-alias)
-KBUILD_CFLAGS	+= $(call cc-disable-warning, enum-conversion)
 
 ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
 KBUILD_CFLAGS	+= $(call cc-option,-ffunction-sections,)
@@ -734,20 +716,15 @@ KBUILD_CFLAGS	+= $(call cc-option,-fdata-sections,)
 endif
 
 ifdef CONFIG_LTO_CLANG
-# Limit inlining across translation units to reduce binary size
-LD_FLAGS_LTO_CLANG := -mllvm -import-instr-limit=5
-ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_UNSAFE
-LD_FLAGS_LTO_CLANG := -mllvm --lto-O3
-endif
 ifdef CONFIG_THINLTO
 lto-clang-flags := -flto=thin
 else
 lto-clang-flags := -flto
 endif
-ifdef CONFIG_UNIFIEDLTO
-lto-clang-flags	+= -funified-lto
-endif
-lto-clang-flags += -fvisibility=default -fsplit-lto-unit
+lto-clang-flags += -fvisibility=default $(call cc-option, -fsplit-lto-unit)
+
+# Limit inlining across translation units to reduce binary size
+LD_FLAGS_LTO_CLANG := -mllvm -import-instr-limit=5
 
 KBUILD_LDFLAGS += $(LD_FLAGS_LTO_CLANG)
 KBUILD_LDFLAGS_MODULE += $(LD_FLAGS_LTO_CLANG)
@@ -798,28 +775,6 @@ DISABLE_LTO	+= $(DISABLE_CFI)
 export DISABLE_CFI
 endif
 
-KBUILD_CFLAGS	+= -mllvm -aggressive-ext-opt \
-           -mllvm -enable-cond-stores-vec \
-           -mllvm -slp-vectorize-hor-store \
-           -mllvm -adce-remove-loops \
-           -mllvm -enable-cse-in-irtranslator \
-           -mllvm -enable-cse-in-legalizer \
-           -mllvm -scalar-evolution-use-expensive-range-sharpening \
-           -mllvm -loop-rotate-multi \
-           -mllvm -enable-interleaved-mem-accesses \
-           -mllvm -enable-masked-interleaved-mem-accesses \
-           -mllvm -enable-gvn-hoist \
-           -mllvm -enable-dfa-jump-thread \
-           -mllvm -allow-unroll-and-jam \
-           -mllvm -enable-loop-distribute \
-           -mllvm -enable-loop-flatten \
-           -mllvm -enable-loopinterchange \
-           -mllvm -enable-unroll-and-jam \
-           -mllvm -extra-vectorizer-passes \
-           -mllvm -interleave-small-loop-scalar-reduction \
-           -mllvm -unroll-runtime-multi-exit \
-           -mllvm -hot-cold-split=true
-
 ifdef CONFIG_LLVM_POLLY
 KBUILD_CFLAGS	+= -mllvm -polly \
 		   -mllvm -polly-run-dce \
@@ -828,28 +783,14 @@ KBUILD_CFLAGS	+= -mllvm -polly \
 		   -mllvm -polly-detect-keep-going \
 		   -mllvm -polly-vectorizer=stripmine \
 		   -mllvm -polly-invariant-load-hoisting \
-		   -mllvm -polly-optimizer=isl \
-		   -mllvm -polly-isl-arg=--no-schedule-serialize-sccs \
-           -mllvm -polly-dependences-analysis-type=value-based \
-           -mllvm -polly-dependences-computeout=0 \
-           -mllvm -polly-enable-delicm \
-           -mllvm -polly-loopfusion-greedy \
-           -mllvm -polly-num-threads=0 \
-           -mllvm -polly-omp-backend=LLVM \
-           -mllvm -polly-parallel \
-           -mllvm -polly-postopts \
-           -mllvm -polly-reschedule \
-           -mllvm -polly-scheduling-chunksize=1 \
-           -mllvm -polly-scheduling=dynamic \
-           -mllvm -polly-tiling
+		   -mllvm -polly-isl-arg=--no-schedule-serialize-sccs
 endif
 
-ifdef CONFIG_LLVM_MLGO_REGISTER
-# Enable MLGO for register allocation. default, release, development
-KBUILD_CFLAGS	+= -mllvm -regalloc-enable-advisor=release \
-		   -mllvm -enable-local-reassign
-KBUILD_LDFLAGS	+= -mllvm -regalloc-enable-advisor=release \
-		   -mllvm -enable-local-reassign
+ifdef CONFIG_SHADOW_CALL_STACK
+scs-flags	:= -fsanitize=shadow-call-stack
+KBUILD_CFLAGS	+= $(scs-flags)
+DISABLE_SCS	:= -fno-sanitize=shadow-call-stack
+export DISABLE_SCS
 endif
 
 ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE

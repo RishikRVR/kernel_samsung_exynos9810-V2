@@ -99,9 +99,6 @@
 #include <linux/defex.h>
 #endif
 
-/* Gaming control */
-#include <linux/gaming_control.h>
-
 /*
  * Minimum number of threads to boot the kernel
  */
@@ -2163,12 +2160,6 @@ long _do_fork(unsigned long clone_flags,
 	struct task_struct *p;
 	int trace = 0;
 	long nr;
-	
-	game_option(current, GAME_START);
-
-	game_option(current, GAME_START);
-
-	game_option(current, GAME_START);
 
 	/*
 	 * Determine whether and which event to report to ptracer.  When

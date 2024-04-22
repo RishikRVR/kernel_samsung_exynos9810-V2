@@ -68,18 +68,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/cgroup.h>
 
-/* Gaming control */
-#include <linux/gaming_control.h>
-
-/* Check if the task is a game */
-static void cgroup_game_check(struct task_struct *tsk, const char *name)
-{
-	if (!strcmp(name, "top-app"))
-		game_option(tsk, GAME_RUNNING);
-	else if (!strcmp(name, "background"))
-		game_option(tsk, GAME_PAUSE);
-}
-
 /*
  * pidlists linger the following amount before being destroyed.  The goal
  * is avoiding frequent destruction in the middle of consecutive read calls
@@ -2974,9 +2962,6 @@ static ssize_t __cgroup_procs_write(struct kernfs_open_file *of, char *buf,
 	ret = cgroup_procs_write_permission(tsk, cgrp, of);
 	if (!ret)
 		ret = cgroup_attach_task(cgrp, tsk, threadgroup);
-
-	if (!ret)
-		cgroup_game_check(tsk, of->kn->parent->name);
 
 	put_task_struct(tsk);
 	goto out_unlock_threadgroup;

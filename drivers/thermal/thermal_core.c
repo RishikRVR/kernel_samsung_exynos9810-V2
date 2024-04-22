@@ -39,7 +39,6 @@
 #include <net/netlink.h>
 #include <net/genetlink.h>
 #include <linux/suspend.h>
-#include <linux/gaming_control.h>
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/thermal.h>
@@ -469,9 +468,6 @@ static void handle_thermal_trip(struct thermal_zone_device *tz, int trip)
 
 	tz->ops->get_trip_type(tz, trip, &type);
 
-	if (thermal_bypass_gaming())
-		trip = 0;
-
 	if (type == THERMAL_TRIP_CRITICAL || type == THERMAL_TRIP_HOT)
 		handle_critical_trips(tz, trip, type);
 	else
@@ -493,7 +489,7 @@ static void handle_thermal_trip(struct thermal_zone_device *tz, int trip)
  *
  * Return: On success returns 0, an error code otherwise
  */
-static int thermal_zone_get_temp_bool(struct thermal_zone_device *tz, int *temp, bool forced)
+int thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp)
 {
 	int ret = -EINVAL;
 	int count;
@@ -507,39 +503,28 @@ static int thermal_zone_get_temp_bool(struct thermal_zone_device *tz, int *temp,
 
 	ret = tz->ops->get_temp(tz, temp);
 
-	if (!forced) {
-		if ((IS_ENABLED(CONFIG_THERMAL_EMULATION) && tz->emul_temperature) || thermal_bypass_gaming()) {
-			for (count = 0; count < tz->trips; count++) {
-				ret = tz->ops->get_trip_type(tz, count, &type);
-				if (!ret && type == THERMAL_TRIP_CRITICAL) {
-					ret = tz->ops->get_trip_temp(tz, count,
-							&crit_temp);
-					break;
-				}
-			}
-
-			/*
-			 * Only allow emulating a temperature when the real temperature
-			 * is below the critical temperature so that the emulation code
-			 * cannot hide critical conditions.
-			 */
-			if (!ret && *temp < crit_temp) {
-				if (thermal_bypass_gaming())
-					*temp = thermal_bypass_gaming();
-				else if (tz->emul_temperature)
-					*temp = tz->emul_temperature;
+	if (IS_ENABLED(CONFIG_THERMAL_EMULATION) && tz->emul_temperature) {
+		for (count = 0; count < tz->trips; count++) {
+			ret = tz->ops->get_trip_type(tz, count, &type);
+			if (!ret && type == THERMAL_TRIP_CRITICAL) {
+				ret = tz->ops->get_trip_temp(tz, count,
+						&crit_temp);
+				break;
 			}
 		}
+
+		/*
+		 * Only allow emulating a temperature when the real temperature
+		 * is below the critical temperature so that the emulation code
+		 * cannot hide critical conditions.
+		 */
+		if (!ret && *temp < crit_temp)
+			*temp = tz->emul_temperature;
 	}
  
 	mutex_unlock(&tz->lock);
 exit:
 	return ret;
-}
-
-int thermal_zone_get_temp(struct thermal_zone_device *tz, int *temp)
-{
-	return thermal_zone_get_temp_bool(tz, temp, false);
 }
 EXPORT_SYMBOL_GPL(thermal_zone_get_temp);
 
@@ -717,7 +702,7 @@ temp_show(struct device *dev, struct device_attribute *attr, char *buf)
 	struct thermal_zone_device *tz = to_thermal_zone(dev);
 	int temperature, ret;
 
-	ret = thermal_zone_get_temp_bool(tz, &temperature, true);
+	ret = thermal_zone_get_temp(tz, &temperature);
 
 	if (ret)
 		return ret;

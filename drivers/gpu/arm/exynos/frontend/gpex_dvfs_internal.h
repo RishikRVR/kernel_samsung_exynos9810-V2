@@ -22,11 +22,10 @@
 #define _GPEX_DVFS_INTERNAL_H_
 
 #include <gpex_clock.h>
-#include <linux/gaming_control.h>
 
 #define DVFS_ASSERT(x)                                                                             \
 	do {                                                                                       \
-		if (x || fake_freq_gaming(DVFS_G3D))                                                                             \
+		if (x)                                                                             \
 			break;                                                                     \
 		printk(KERN_EMERG "### ASSERTION FAILED %s: %s: %d: %s\n", __FILE__, __func__,     \
 		       __LINE__, #x);                                                              \

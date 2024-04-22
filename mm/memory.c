@@ -1155,9 +1155,6 @@ again:
 			continue;
 		}
 
-		if (need_resched())
-			break;
-
 		if (pte_present(ptent)) {
 			struct page *page;
 
@@ -1248,11 +1245,8 @@ again:
 			__tlb_remove_pte_page(tlb, pending_page);
 			pending_page = NULL;
 		}
-	}
-
-	if (addr != end) {
-		cond_resched();
-		goto again;
+		if (addr != end)
+			goto again;
 	}
 
 	return addr;

@@ -31,28 +31,9 @@
 #include <gpexbe_utilization.h>
 #include <gpexbe_debug.h>
 
-#include <linux/gaming_control.h>
-
 #include "gpex_clock_internal.h"
 
 #define CPU_MAX INT_MAX
-
-int gpu_min_clock_custom = 0;
-int gpu_custom_min_clock(int gpu_min_clock)
-{
-	gpu_min_clock_custom = gpu_min_clock;
-	return 0;
-}
-
-int gpu_max_clock_custom = 0;
-int gpu_custom_max_clock(int gpu_max_clock)
-{
-	gpu_max_clock_custom = gpu_max_clock;
-
-	gpex_clock_set(gpu_max_clock_custom);
-
-	return 0;
-}
 
 static struct _clock_info clk_info;
 
@@ -62,23 +43,14 @@ int gpex_clock_get_boot_clock(void)
 }
 int gpex_clock_get_max_clock(void)
 {
-	if (gpu_max_clock_custom > 0)
-		return gpu_max_clock_custom;
-
 	return clk_info.gpu_max_clock;
 }
 int gpex_clock_get_max_clock_limit(void)
 {
-	if (gpu_max_clock_custom > 0)
-		return gpu_max_clock_custom;
-
 	return clk_info.gpu_max_clock_limit;
 }
 int gpex_clock_get_min_clock(void)
 {
-	if (gpu_min_clock_custom > 0)
-		return gpu_min_clock_custom;
-
 	return clk_info.gpu_min_clock;
 }
 int gpex_clock_get_cur_clock(void)
@@ -87,16 +59,10 @@ int gpex_clock_get_cur_clock(void)
 }
 int gpex_clock_get_max_lock(void)
 {
-	if (gpu_max_clock_custom > 0)
-		return gpu_max_clock_custom;
-
 	return clk_info.max_lock;
 }
 int gpex_clock_get_min_lock(void)
 {
-	if (gpu_min_clock_custom > 0)
-		return gpu_min_clock_custom;
-
 	return clk_info.min_lock;
 }
 int gpex_clock_get_clock(int level)
@@ -111,21 +77,15 @@ u64 gpex_clock_get_time_busy(int level)
 {
 	return clk_info.table[level].time_busy;
 }
-bool gpex_clock_get_unlock_freqs_status(void)
+/*******************************************
+ * static helper functions
+ ******************************************/
+static int gpex_clock_update_config_data_from_dt(void)
 {
-	if (gaming_mode)
-		return false;
-
-	return clk_info.unlock_freqs;
-}
-int gpex_clock_update_config_data_from_dt(void)
-{
-	dt_clock_item *dt_clock_table = gpexbe_devicetree_get_clock_table();
 	int ret = 0;
 	struct freq_volt *fv_array;
 	int asv_lv_num;
 	int i, j;
-	int new_size;
 
 	clk_info.gpu_max_clock = gpexbe_devicetree_get_int(gpu_max_clock);
 	clk_info.gpu_min_clock = gpexbe_devicetree_get_int(gpu_min_clock);
@@ -133,11 +93,8 @@ int gpex_clock_update_config_data_from_dt(void)
 	clk_info.gpu_max_clock_limit = gpexbe_clock_get_max_freq();
 
 	/* TODO: rename the table_size variable to something more sensible like  row_cnt */
-	new_size = gpexbe_devicetree_get_int(gpu_dvfs_table_size.row);
-	if (!clk_info.table || clk_info.table_size != new_size) {
-		clk_info.table_size = new_size;
-		clk_info.table = kcalloc(clk_info.table_size, sizeof(gpu_clock_info), GFP_KERNEL);
-	}
+	clk_info.table_size = gpexbe_devicetree_get_int(gpu_dvfs_table_size.row);
+	clk_info.table = kcalloc(clk_info.table_size, sizeof(gpu_clock_info), GFP_KERNEL);
 
 	asv_lv_num = gpexbe_clock_get_level_num();
 	fv_array = kcalloc(asv_lv_num, sizeof(*fv_array), GFP_KERNEL);
@@ -149,12 +106,18 @@ int gpex_clock_update_config_data_from_dt(void)
 	if (!ret)
 		GPU_LOG(MALI_EXYNOS_ERROR, "Failed to get G3D ASV table from CAL IF\n");
 
-	for (j = 0; j < clk_info.table_size; j++) {
-		if (dt_clock_table[j].clock <= clk_info.gpu_max_clock && dt_clock_table[j].clock >= clk_info.gpu_min_clock) {
-			clk_info.table[j].clock = dt_clock_table[j].clock;
-			for (i = 0; i < asv_lv_num; i++)
-				if (fv_array[i].freq == clk_info.table[j].clock)
-					clk_info.table[j].voltage = fv_array[i].volt;
+	for (i = 0; i < asv_lv_num; i++) {
+		int cal_freq = fv_array[i].freq;
+		int cal_vol = fv_array[i].volt;
+		dt_clock_item *dt_clock_table = gpexbe_devicetree_get_clock_table();
+
+		if (cal_freq <= clk_info.gpu_max_clock && cal_freq >= clk_info.gpu_min_clock) {
+			for (j = 0; j < clk_info.table_size; j++) {
+				if (cal_freq == dt_clock_table[j].clock) {
+					clk_info.table[j].clock = cal_freq;
+					clk_info.table[j].voltage = cal_vol;
+				}
+			}
 		}
 	}
 
@@ -162,9 +125,7 @@ int gpex_clock_update_config_data_from_dt(void)
 
 	return 0;
 }
-/*******************************************
- * static helper functions
- ******************************************/
+
 static int set_clock_using_calapi(int clk)
 {
 	int ret = 0;
@@ -278,7 +239,7 @@ static int gpex_clock_set_helper(int clock)
 
 	clk_idx = gpex_clock_get_table_idx(clock);
 	if (clk_idx < 0) {
-		GPU_LOG(MALI_EXYNOS_DEBUG, "%s: mismatch clock error (%d)\n", __func__, clock);
+		GPU_LOG(MALI_EXYNOS_ERROR, "%s: mismatch clock error (%d)\n", __func__, clock);
 		return -1;
 	}
 
@@ -353,7 +314,6 @@ int gpex_clock_init(struct device **dev)
 	clk_info.kbdev = container_of(dev, struct kbase_device, dev);
 	clk_info.max_lock = 0;
 	clk_info.min_lock = 0;
-	clk_info.unlock_freqs = false;
 
 	for (i = 0; i < NUMBER_LOCK; i++) {
 		clk_info.user_max_lock[i] = 0;
@@ -376,11 +336,7 @@ void gpex_clock_term(void)
 
 int gpex_clock_get_table_idx(int clock)
 {
-	int fake_freq = fake_freq_gaming(DVFS_G3D);
 	int i;
-
-	if (fake_freq)
-		clock = fake_freq;
 
 	if (clock < clk_info.gpu_min_clock)
 		return -1;
