@@ -2,6 +2,7 @@
 #include <soc/samsung/ect_parser.h>
 #include <soc/samsung/cal-if.h>
 #include <soc/samsung/acpm_mfd.h>
+#include <linux/gaming_control.h>
 
 #include "pwrcal-env.h"
 #include "pwrcal-rae.h"
@@ -45,7 +46,7 @@ int cal_dfs_get_bigturbo_max_freq(unsigned int *table)
 	return vclk_get_bigturbo_table(table);
 }
 
-int cal_dfs_set_rate(unsigned int id, unsigned long rate)
+int __cal_dfs_set_rate(unsigned int id, unsigned long rate)
 {
 	struct vclk *vclk;
 	int ret;
@@ -62,6 +63,14 @@ int cal_dfs_set_rate(unsigned int id, unsigned long rate)
 	}
 
 	return ret;
+}
+
+int cal_dfs_set_rate(unsigned int id, unsigned long rate)
+{
+	if (cal_dfs_check_gaming_mode(id))
+		return 0;
+
+	return __cal_dfs_set_rate(id, rate);
 }
 
 int cal_dfs_set_rate_switch(unsigned int id, unsigned long switch_rate)
@@ -95,6 +104,10 @@ unsigned long cal_dfs_get_rate(unsigned int id)
 {
 	int ret;
 
+	ret = cal_dfs_check_gaming_mode(id);
+	if (ret)
+		return ret;
+
 	ret = vclk_recalc_rate(id);
 
 	return ret;
@@ -113,6 +126,9 @@ int cal_clk_setrate(unsigned int id, unsigned long rate)
 {
 	int ret = -EINVAL;
 
+	if (cal_dfs_check_gaming_mode(id))
+		return 0;
+
 	ret = vclk_set_rate(id, rate);
 
 	return ret;
@@ -121,6 +137,10 @@ int cal_clk_setrate(unsigned int id, unsigned long rate)
 unsigned long cal_clk_getrate(unsigned int id)
 {
 	int ret = 0;
+
+	ret = cal_dfs_check_gaming_mode(id);
+	if (ret)
+		return ret;
 
 	ret = vclk_recalc_rate(id);
 
@@ -167,6 +187,7 @@ unsigned int cal_dfs_get_resume_freq(unsigned int id)
 int cal_pd_control(unsigned int id, int on)
 {
 	unsigned int index;
+	u8 channel = 1;
 	int ret;
 
 	if ((id & 0xFFFF0000) != BLKPWR_MAGIC)
@@ -176,12 +197,12 @@ int cal_pd_control(unsigned int id, int on)
 
 	if (on) {
 		if ((id & 0xffff) == 0x8)
-			exynos_acpm_update_reg(0x3, 0x2a, 0x3 << 6, 0x3 << 6);
+			exynos_acpm_update_reg(channel, 0x3, 0x2a, 0x3 << 6, 0x3 << 6);
 		ret = pmucal_local_enable(index);
 	} else {
 		ret = pmucal_local_disable(index);
 		if ((id & 0xffff) == 0x8)
-			exynos_acpm_update_reg(0x3, 0x2a, 0x0 << 6, 0x3 << 6);
+			exynos_acpm_update_reg(channel, 0x3, 0x2a, 0x0 << 6, 0x3 << 6);
 	}
 
 	return ret;
