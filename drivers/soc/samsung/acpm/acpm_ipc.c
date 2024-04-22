@@ -19,7 +19,6 @@
 #include <linux/list.h>
 #include <linux/wait.h>
 #include <linux/slab.h>
-#include <soc/samsung/exynos-condbg.h>
 
 #include "acpm.h"
 #include "acpm_ipc.h"
