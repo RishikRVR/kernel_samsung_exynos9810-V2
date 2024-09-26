@@ -16,6 +16,7 @@
 
 struct kobject *exynos_cpu_hotplug_kobj(void);
 bool exynos_cpu_hotplug_enabled(void);
+bool exynos_cpu_hotplug_gov_enabled(void);
 void exynos_cpu_hotplug_gov_activated(void);
 
 void exynos_hpgov_update_rq_load(int cpu);
@@ -33,4 +34,5 @@ static BLOCKING_NOTIFIER_HEAD(exynos_cpuhotplug_notifier_list);
 int exynos_cpuhotplug_register_notifier(struct notifier_block *nb, unsigned int list);
 int exynos_cpuhotplug_unregister_notifier(struct notifier_block *nb, unsigned int list);
 
+bool exynos_cpufreq_get_unlock_freqs_status(void);
 #endif /* __EXYNOS_CPU_HOTPLUG_H */

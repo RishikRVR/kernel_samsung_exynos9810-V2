@@ -30,9 +30,14 @@
 #define BPF_FROM_LE	BPF_TO_LE
 #define BPF_FROM_BE	BPF_TO_BE
 
+/* jmp encodings */
 #define BPF_JNE		0x50	/* jump != */
+#define BPF_JLT		0xa0	/* LT is unsigned, '<' */
+#define BPF_JLE		0xb0	/* LE is unsigned, '<=' */
 #define BPF_JSGT	0x60	/* SGT is signed '>', GT in x86 */
 #define BPF_JSGE	0x70	/* SGE is signed '>=', GE in x86 */
+#define BPF_JSLT	0xc0	/* SLT is signed, '<' */
+#define BPF_JSLE	0xd0	/* SLE is signed, '<=' */
 #define BPF_CALL	0x80	/* function call */
 #define BPF_EXIT	0x90	/* function return */
 
@@ -75,7 +80,6 @@ enum bpf_cmd {
 	BPF_OBJ_GET,
 	BPF_PROG_ATTACH,
 	BPF_PROG_DETACH,
-	BPF_OBJ_GET_INFO_BY_FD = BPF_PROG_DETACH + 6,
 };
 
 enum bpf_map_type {
@@ -207,11 +211,6 @@ union bpf_attr {
 		__u32		attach_type;
 		__u32		attach_flags;
 	};
-	struct { /* anonymous struct used by BPF_OBJ_GET_INFO_BY_FD */
-		__u32		bpf_fd;
-		__u32		info_len;
-		__aligned_u64	info;
-	} info;
 } __attribute__((aligned(8)));
 
 /* integer value in 'imm' field of BPF_CALL instruction selects which helper
@@ -652,26 +651,5 @@ struct xdp_md {
 	__u32 data;
 	__u32 data_end;
 };
-
-#define BPF_TAG_SIZE	8
-
-struct bpf_prog_info {
-	__u32 type;
-	__u32 id;
-	__u8  tag[BPF_TAG_SIZE];
-	__u32 jited_prog_len;
-	__u32 xlated_prog_len;
-	__aligned_u64 jited_prog_insns;
-	__aligned_u64 xlated_prog_insns;
-} __attribute__((aligned(8)));
-
-struct bpf_map_info {
-	__u32 type;
-	__u32 id;
-	__u32 key_size;
-	__u32 value_size;
-	__u32 max_entries;
-	__u32 map_flags;
-} __attribute__((aligned(8)));
 
 #endif /* _UAPI__LINUX_BPF_H__ */

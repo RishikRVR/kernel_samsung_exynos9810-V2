@@ -12,9 +12,7 @@
 #include <linux/of_gpio.h>
 #include <linux/of.h>
 #include <linux/clk-provider.h>
-#if defined(CONFIG_ION_EXYNOS)
 #include <linux/exynos_iovmm.h>
-#endif
 #include <linux/of_address.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/irq.h>
@@ -239,7 +237,7 @@ int decon_error_cb(struct decon_device *decon,
 	if (retry > DISP_ERROR_CB_RETRY_CNT) {
 		decon_err("DECON:ERR:%s:failed to recover(retry %d times)\n",
 				__func__, DISP_ERROR_CB_RETRY_CNT);
-		decon_dump(decon, REQ_DSI_DUMP);
+		decon_dump(decon);
 #ifdef CONFIG_LOGGING_BIGDATA_BUG
 		log_decon_bigdata(decon);
 #endif
@@ -461,9 +459,15 @@ static int decon_vsync_thread(void *data)
 
 	while (!kthread_should_stop()) {
 		ktime_t timestamp = decon->vsync.timestamp;
+#if defined(CONFIG_SUPPORT_KERNEL_4_9)
 		int ret = wait_event_interruptible(decon->vsync.wait,
 			!ktime_equal(timestamp, decon->vsync.timestamp) &&
 			decon->vsync.active);
+#else
+		int ret = wait_event_interruptible(decon->vsync.wait,
+			(timestamp != decon->vsync.timestamp) &&
+			decon->vsync.active);
+#endif
 
 		if (!ret)
 			sysfs_notify(&decon->dev->kobj, NULL, "vsync");
@@ -827,8 +831,7 @@ static int decon_set_win_info(struct fb_info *info)
 	decon_reg_wait_for_update_timeout(decon->id, SHADOW_UPDATE_TIMEOUT);
 
 	win_no = decon->dt.dft_win;
-	win_regs.wincon |= wincon(var->transp.length, 0, 0xFF,
-			0xFF, DECON_BLENDING_NONE, win_no);
+	win_regs.wincon |= wincon(win_no);
 	win_regs.start_pos = win_start_pos(0, 0);
 	win_regs.end_pos = win_end_pos(0, 0, var->xres, var->yres);
 	win_regs.pixel_count = (var->xres * var->yres);
@@ -922,14 +925,13 @@ int decon_pan_display(struct fb_var_screeninfo *var, struct fb_info *info)
 	sd = decon->dpp_sd[decon->dt.dft_idma];
 	if (v4l2_subdev_call(sd, core, ioctl, DPP_WIN_CONFIG, &config)) {
 		decon_err("%s: Failed to config DPP-%d\n", __func__, win->dpp_id);
-		decon_reg_set_win_enable(decon->id, decon->dt.dft_win, false);
+		decon_reg_win_enable_and_update(decon->id, decon->dt.dft_win, false);
 		clear_bit(decon->dt.dft_idma, &decon->cur_using_dpp);
 		set_bit(decon->dt.dft_idma, &decon->dpp_err_stat);
-		ret = -EINVAL;
 		goto err;
 	}
 
-	decon_reg_update_req_window(decon->id, decon->dt.dft_win);
+	decon_reg_all_win_shadow_update_req(decon->id);
 
 	decon_reg_start(decon->id, &psr);
 err:
@@ -946,7 +948,6 @@ EXPORT_SYMBOL(decon_pan_display);
 
 int decon_mmap(struct fb_info *info, struct vm_area_struct *vma)
 {
-#ifdef CONFIG_ION_EXYNOS
 	int ret;
 	struct decon_win *win = info->par;
 	vma->vm_page_prot = pgprot_writecombine(vma->vm_page_prot);
@@ -957,9 +958,6 @@ int decon_mmap(struct fb_info *info, struct vm_area_struct *vma)
 #endif
 
 	return ret;
-#else
-	return 0;
-#endif
 }
 EXPORT_SYMBOL(decon_mmap);
 
@@ -1068,7 +1066,7 @@ int decon_enter_hiber(struct decon_device *decon)
 
 	ret = decon_reg_stop(decon->id, decon->dt.out_idx[0], &psr, true);
 	if (ret < 0)
-		decon_dump(decon, REQ_DSI_DUMP);
+		decon_dump(decon);
 
 	decon_reg_clear_int_all(decon->id);
 
